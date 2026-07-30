@@ -1,31 +1,78 @@
 import time
-import requests
 from typing import Optional
 
-def fetch_page(url: str, delay: float = 1.5) -> Optional[str]:
+import requests
+
+
+class Fetcher:
     """
-    Télécharge le contenu HTML d'une URL de manière éthique et robuste.
-    Intègre une pause obligatoire pour ne pas surcharger le serveur.
+    Client HTTP chargé de télécharger les pages.
     """
-    print(f"⏳ Attente de {delay}s par courtoisie (respect éthique)...")
-    time.sleep(delay)
-    
-    # En-têtes vitaux : Identification claire + Forçage du Français (Spécificité S03)
-    headers = {
-        "User-Agent": "TP-Scraping-Student/1.0 (Contact: anass.houdzi@efficom.fr)",
-        "Accept-Language": "fr-CA,fr;q=0.9,en;q=0.8"
-    }
-    
-    try:
-        print(f"🌐 Téléchargement de : {url}")
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        # Lève une exception si le statut HTTP est une erreur (404, 500, etc.)
-        response.raise_for_status()
-        
-        print("✅ Page téléchargée avec succès.")
-        return response.text
-        
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Erreur réseau lors de l'accès à {url} : {e}")
-        return None
+
+    def __init__(
+        self,
+        user_agent: str,
+        accept_language: str,
+        delay: float = 1.0,
+        timeout: int = 30,
+        logger=None,
+    ) -> None:
+        self.delay = max(0.0, delay)
+        self.timeout = timeout
+        self.logger = logger
+
+        self.session = requests.Session()
+
+        self.session.headers.update(
+            {
+                "User-Agent": user_agent,
+                "Accept-Language": accept_language,
+                "Accept": (
+                    "text/html,"
+                    "application/xhtml+xml"
+                ),
+            }
+        )
+
+    def fetch_page(self, url: str) -> Optional[str]:
+        """
+        Télécharge une page et retourne son HTML.
+        """
+
+        if self.delay:
+            time.sleep(self.delay)
+
+        try:
+            if self.logger:
+                self.logger.info(
+                    "Téléchargement : %s",
+                    url,
+                )
+
+            response = self.session.get(
+                url,
+                timeout=self.timeout,
+                allow_redirects=True,
+            )
+
+            response.raise_for_status()
+
+            response.encoding = (
+                response.apparent_encoding
+                or response.encoding
+            )
+
+            return response.text
+
+        except requests.RequestException as error:
+            if self.logger:
+                self.logger.error(
+                    "Échec HTTP pour %s : %s",
+                    url,
+                    error,
+                )
+
+            return None
+
+    def close(self) -> None:
+        self.session.close()
