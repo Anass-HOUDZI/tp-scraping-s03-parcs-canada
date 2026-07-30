@@ -1,0 +1,12 @@
+# Environnements virtuels
+venv/
+env/
+.env
+
+# Fichiers générés par Python
+__pycache__/
+*.pyc
+
+# Fichiers d'export et logs (optionnel, mais recommandé pour ne pas polluer Git)
+*.log
+*.jsonl
