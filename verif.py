@@ -1,77 +1,108 @@
-import os
-from src.parser import parse_places
-from src.exporter import export_to_jsonl
+from pathlib import Path
 
-def main_verification():
-    print("=== DÉBUT DE LA VÉRIFICATION HORS-LIGNE ===")
-    
-    # 1. Chargement du fichier local (Garantit l'exécution sans réseau)
-    file_path = "samples/sample_page.html"
-    if not os.path.exists(file_path):
-        print(f"❌ Erreur : Le fichier {file_path} est introuvable. As-tu bien exécuté la commande curl ?")
+from src.exporter import export_to_jsonl
+from src.parser import parse_places
+
+
+SAMPLE_FILE = Path(
+    "samples/sample_page.html"
+)
+
+OUTPUT_FILE = Path(
+    "samples/sample_output.jsonl"
+)
+
+SOURCE_URL = (
+    "https://parks.canada.ca/pn-np"
+)
+
+
+def main_verification() -> None:
+    print(
+        "=== VÉRIFICATION HORS-LIGNE ==="
+    )
+
+    if not SAMPLE_FILE.exists():
+        print(
+            f"ERREUR : fichier absent : "
+            f"{SAMPLE_FILE}"
+        )
         return
 
-    with open(file_path, "r", encoding="utf-8") as f:
-        html_content = f.read()
+    html_content = SAMPLE_FILE.read_text(
+        encoding="utf-8"
+    )
 
-    source_url = "https://parks.canada.ca/pn-np"
-    
-    # 2. Extraction via BeautifulSoup
-    places = parse_places(html_content, source_url)
-    
-    # 3. Statistiques et Déduplication
-    vus = len(places)
-    exportes = 0
-    rejetes = 0
-    doublons = 0
-    champs_manquants = 0
-    
-    ids_vus = set()
-    objets_valides = []
+    places = parse_places(
+        html_content,
+        SOURCE_URL,
+    )
+
+    seen_ids = set()
+    valid_places = []
+
+    rejected = 0
+    duplicates = 0
+    missing_fields = 0
 
     for place in places:
-        # Règle de qualité : Rejet si un champ critique (ex: nom) est absent
-        if not place.name or place.name == "Nom inconnu":
-            rejetes += 1
-            champs_manquants += 1
+        missing = (
+            place.missing_required_fields()
+        )
+
+        if missing:
+            rejected += 1
+            missing_fields += len(missing)
             continue
-            
-        # Règle de déduplication : On vérifie si l'ID a déjà été traité
-        if place.id in ids_vus:
-            doublons += 1
-            rejetes += 1
+
+        if place.id in seen_ids:
+            duplicates += 1
+            rejected += 1
             continue
-            
-        ids_vus.add(place.id)
-        objets_valides.append(place)
-        exportes += 1
 
-    # 4. Export au format exigé (JSONL)
-    export_path = "samples/sample_output.jsonl"
-    export_to_jsonl(objets_valides, export_path)
+        seen_ids.add(place.id)
+        valid_places.append(place)
 
-    # 5. Affichage des 3 contrôles obligatoires pour la grille de notation
-    print("\n=== RÉSULTATS DES CONTRÔLES AUTOMATIQUES ===")
-    print(f"1. Nombre d'objets extraits (>0) : {'✅ OK' if vus > 0 else '❌ ÉCHEC'} ({vus} objets vus)")
-    
-    if objets_valides:
-        test_item = objets_valides[0]
-        # Vérification d'une normalisation (URL absolue)
-        norm_ok = test_item.url.startswith("http")
-        print(f"2. Normalisation URL absolue   : {'✅ OK' if norm_ok else '❌ ÉCHEC'} ({test_item.url})")
-    else:
-        print("2. Normalisation URL absolue   : ❌ ÉCHEC (aucun objet valide)")
-        
-    print(f"3. Déduplication / Rejets      : ✅ OK ({doublons} doublons, {rejetes} rejets au total)")
+    export_to_jsonl(
+        valid_places,
+        str(OUTPUT_FILE),
+    )
 
-    # 6. Tableau récapitulatif pour remplir ton document Word facilement
-    print("\n=== TABLEAU RÉCAPITULATIF (À copier dans le rapport) ===")
-    print(f"Objets vus                    : {vus}")
-    print(f"Objets exportés               : {exportes}")
-    print(f"Objets rejetés                : {rejetes}")
-    print(f"Doublons détectés             : {doublons}")
-    print(f"Champs obligatoires manquants : {champs_manquants}")
-    print("========================================================\n")
+    print(
+        "Objets vus                    :",
+        len(places),
+    )
+    print(
+        "Objets exportés               :",
+        len(valid_places),
+    )
+    print(
+        "Objets rejetés                :",
+        rejected,
+    )
+    print(
+        "Doublons détectés             :",
+        duplicates,
+    )
+    print(
+        "Champs obligatoires manquants :",
+        missing_fields,
+    )
+
+    normalization_ok = (
+        bool(valid_places)
+        and valid_places[0].url.startswith(
+            "http"
+        )
+    )
+
+    print(
+        "URL absolue                   :",
+        "OK"
+        if normalization_ok
+        else "ÉCHEC",
+    )
+
 
 if __name__ == "__main__":
     main_verification()
