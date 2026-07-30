@@ -45,15 +45,26 @@ def main():
     missing_fields_count = 0
 
     try:
-        logger.info("Début du scraping des parcs du Canada")
+        logger.info(
+            "Début du scraping des parcs du Canada"
+        )
 
         # Télécharger la page contenant la liste des parcs
-        listing_html = fetcher.fetch_page(LIST_URL)
+        listing_html = fetcher.fetch_page(
+            LIST_URL
+        )
 
         if not listing_html:
             logger.error(
-                "Impossible de télécharger la page contenant la liste des parcs."
+                "Impossible de télécharger la page "
+                "contenant la liste des parcs."
             )
+
+            print(
+                "Impossible de télécharger la page "
+                "contenant la liste des parcs."
+            )
+
             return
 
         # Extraire les liens des parcs
@@ -63,7 +74,10 @@ def main():
             max_objects=MAX_OBJECTS,
         )
 
-        print(f"Nombre de parcs trouvés : {len(park_links)}")
+        print(
+            f"Nombre de parcs trouvés : "
+            f"{len(park_links)}"
+        )
 
         # Parcourir chaque parc
         for index, park_link in enumerate(
@@ -78,7 +92,7 @@ def main():
                 f"{park_name}"
             )
 
-            # Télécharger la page du parc
+            # Télécharger la page de détail
             detail_html = fetcher.fetch_page(
                 park_url
             )
@@ -89,6 +103,11 @@ def main():
                 logger.warning(
                     "Page non téléchargée : %s",
                     park_name,
+                )
+
+                print(
+                    f"Page non téléchargée : "
+                    f"{park_name}"
                 )
 
                 continue
@@ -113,7 +132,8 @@ def main():
                 )
 
                 logger.warning(
-                    "Objet rejeté : %s | Champs manquants : %s",
+                    "Objet rejeté : %s | "
+                    "Champs manquants : %s",
                     park_name,
                     ", ".join(missing_fields),
                 )
@@ -121,6 +141,7 @@ def main():
                 print(
                     f"Objet rejeté : {park_name}"
                 )
+
                 print(
                     "Champs manquants :",
                     ", ".join(missing_fields),
@@ -138,41 +159,66 @@ def main():
                     place.id,
                 )
 
+                print(
+                    f"Doublon ignoré : {place.id}"
+                )
+
                 continue
 
             seen_ids.add(place.id)
             valid_places.append(place)
 
         print("\nScraping terminé")
+
         print(
             "Nombre de parcs trouvés :",
             len(park_links),
         )
+
         print(
             "Nombre de parcs valides :",
             len(valid_places),
         )
+
         print(
             "Nombre de parcs rejetés :",
             rejected_count,
         )
+
         print(
             "Nombre de doublons :",
             duplicate_count,
         )
+
         print(
             "Nombre de champs manquants :",
             missing_fields_count,
         )
 
-        # Export au format JSONL
+        # Exporter tous les parcs valides
+        # dans samples/sample_output.jsonl
         if valid_places:
             export_to_jsonl(
                 valid_places,
                 OUTPUT_JSONL,
             )
+
+            print(
+                f"{len(valid_places)} parcs exportés "
+                f"dans {OUTPUT_JSONL}"
+            )
+
+            logger.info(
+                "%s parcs exportés dans %s",
+                len(valid_places),
+                OUTPUT_JSONL,
+            )
         else:
             print(
+                "Aucune donnée valide à exporter."
+            )
+
+            logger.warning(
                 "Aucune donnée valide à exporter."
             )
 
