@@ -1,3 +1,7 @@
+"""Parsing HTML de la liste et des fiches de Parcs Canada."""
+
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from html import unescape
 from urllib.parse import urljoin, urlparse
@@ -8,72 +12,33 @@ from .models import ProtectedPlace
 
 
 def _clean_text(value: str | None) -> str:
-    """
-    Nettoie les espaces et les entités HTML.
-    """
-
     if not value:
         return ""
-
-    return " ".join(
-        unescape(value).split()
-    )
+    return " ".join(unescape(value).split())
 
 
 def _stable_id(url: str) -> str:
-    """
-    Génère un identifiant stable à partir de l'URL.
-    """
-
-    path_parts = [
-        part
-        for part in urlparse(url).path.split("/")
-        if part
-    ]
-
-    if len(path_parts) >= 3:
-        useful_parts = path_parts[-3:]
-    else:
-        useful_parts = path_parts
-
-    return "-".join(useful_parts).lower()
+    parts = [part for part in urlparse(url).path.split("/") if part]
+    return "-".join(parts[-3:]).lower()
 
 
-def _province_from_url(url: str) -> str:
-    """
-    Extrait le code de province depuis l'URL.
-    """
-
-    parts = [
-        part
-        for part in urlparse(url).path.split("/")
-        if part
-    ]
-
+def _province_from_url(url: str) -> str | None:
+    parts = [part for part in urlparse(url).path.split("/") if part]
     try:
         index = parts.index("pn-np")
-        return parts[index + 1].upper()
+    except ValueError:
+        return None
+    return parts[index + 1].upper() if index + 1 < len(parts) else ""
 
-    except (ValueError, IndexError):
-        return ""
 
-
-def _type_from_name(name: str) -> str:
-    """
-    Déduit le type du lieu depuis son nom.
-    """
-
-    lowered = name.lower()
-
+def _type_from_name(name: str | None) -> str:
+    lowered = (name or "").lower()
     if "national park and reserve" in lowered:
         return "National Park and Reserve"
-
     if "national park reserve" in lowered:
         return "National Park Reserve"
-
-    if "national park" in lowered:
+    if "national park" in lowered or "parc national" in lowered:
         return "National Park"
-
     return "Protected Place"
 
 
@@ -81,71 +46,102 @@ def parse_park_links(
     html_content: str,
     source_url: str,
     max_objects: int = 60,
+    logger=None,
 ) -> list[dict[str, str]]:
-    """
-    Extrait et déduplique les liens des parcs
-    depuis la page contenant la liste.
-    """
+    """Extrait les liens de parcs à partir d'ancres sémantiques et les déduplique."""
+    soup = BeautifulSoup(html_content, "html.parser")
+    results: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
 
-    soup = BeautifulSoup(
-        html_content,
-        "html.parser",
-    )
+    # Une ancre avec href est plus stable qu'une classe CSS générée.
+    for anchor in soup.find_all("a", href=True):
+        name = _clean_text(anchor.get_text(" ", strip=True))
+        absolute_url = urljoin(source_url, anchor.get("href", ""))
+        parsed = urlparse(absolute_url)
+        path = parsed.path.rstrip("/")
 
-    results = []
-    seen_urls = set()
+        name_matches = "national park" in name.lower() or "parc national" in name.lower()
+        path_matches = path.startswith("/pn-np/")
+        enough_segments = len([part for part in path.split("/") if part]) >= 3
 
-    for anchor in soup.find_all(
-        "a",
-        href=True,
-    ):
-        name = _clean_text(
-            anchor.get_text(
-                " ",
-                strip=True,
-            )
-        )
-
-        absolute_url = urljoin(
-            source_url,
-            anchor.get("href", ""),
-        )
-
-        path = urlparse(
-            absolute_url
-        ).path.rstrip("/")
-
-        if "national park" not in name.lower():
+        if not (name_matches and path_matches and enough_segments):
             continue
-
-        if not path.startswith("/pn-np/"):
-            continue
-
-        parts = [
-            part
-            for part in path.split("/")
-            if part
-        ]
-
-        if len(parts) < 3:
-            continue
-
         if absolute_url in seen_urls:
+            if logger:
+                logger.warning("Lien dupliqué ignoré : %s", absolute_url)
             continue
 
         seen_urls.add(absolute_url)
-
-        results.append(
-            {
-                "name": name,
-                "url": absolute_url,
-            }
-        )
-
+        results.append({"name": name, "url": absolute_url})
         if len(results) >= max_objects:
             break
 
+    if logger and not results:
+        logger.warning("Aucun lien de parc trouvé : vérifier la structure HTML")
     return results
+
+
+def _extract_name(soup: BeautifulSoup, fallback_name: str, logger=None) -> str | None:
+    """Extrait le nom via h1, puis métadonnée Open Graph, puis repli de liste."""
+    h1 = soup.find("h1")
+    og_title = soup.find("meta", attrs={"property": "og:title"})
+    sources_found = h1 is not None or og_title is not None or bool(fallback_name)
+
+    candidates = [
+        h1.get_text(" ", strip=True) if h1 else "",
+        og_title.get("content", "") if og_title else "",
+        fallback_name,
+    ]
+    for raw in candidates:
+        name = _clean_text(raw).replace(" - Parks Canada", "").strip()
+        if name:
+            return name
+
+    if logger:
+        logger.warning("Nom introuvable dans h1, og:title et fallback")
+    return "" if sources_found else None
+
+
+def _extract_summary(soup: BeautifulSoup, logger=None) -> str | None:
+    """Extrait un résumé via le contenu principal, puis les métadonnées."""
+    h1 = soup.find("h1")
+    source_found = False
+
+    if h1:
+        main = soup.find("main")
+        paragraphs = main.find_all("p") if main else h1.find_all_next("p")
+        for paragraph in paragraphs:
+            source_found = True
+            candidate = _clean_text(paragraph.get_text(" ", strip=True))
+            if len(candidate) >= 40:
+                return candidate
+
+    for attrs in ({"property": "og:description"}, {"name": "description"}):
+        tag = soup.find("meta", attrs=attrs)
+        if tag is not None:
+            source_found = True
+            candidate = _clean_text(tag.get("content", ""))
+            if candidate:
+                return candidate
+
+    if logger:
+        logger.warning("Résumé introuvable dans le contenu principal et les métadonnées")
+    return "" if source_found else None
+
+
+def _extract_image_url(soup: BeautifulSoup, page_url: str, logger=None) -> str | None:
+    og_image = soup.find("meta", attrs={"property": "og:image"})
+    if og_image and og_image.get("content"):
+        return urljoin(page_url, og_image.get("content"))
+
+    main = soup.find("main")
+    image = main.find("img", src=True) if main else None
+    if image:
+        return urljoin(page_url, image.get("src"))
+
+    if logger:
+        logger.warning("Image absente pour %s (champ optionnel)", page_url)
+    return None
 
 
 def parse_park_detail(
@@ -153,258 +149,20 @@ def parse_park_detail(
     page_url: str,
     source_url: str,
     fallback_name: str = "",
+    logger=None,
 ) -> ProtectedPlace:
-    """
-    Extrait les informations d'une page détail.
-    """
-
-    soup = BeautifulSoup(
-        html_content,
-        "html.parser",
-    )
-
-    # Nom
-    h1 = soup.find("h1")
-
-    name = _clean_text(
-        h1.get_text(
-            " ",
-            strip=True,
-        )
-        if h1
-        else ""
-    )
-
-    # Solution de secours avec og:title
-    if not name:
-        og_title = soup.find(
-            "meta",
-            attrs={
-                "property": "og:title"
-            },
-        )
-
-        name = _clean_text(
-            og_title.get("content")
-            if og_title
-            else ""
-        )
-
-    # Nom provenant de la page liste
-    if not name:
-        name = _clean_text(
-            fallback_name
-        )
-
-    name = name.replace(
-        " - Parks Canada",
-        "",
-    ).strip()
-
-    # Résumé
-    summary = ""
-
-    if h1:
-        for paragraph in h1.find_all_next("p"):
-            candidate = _clean_text(
-                paragraph.get_text(
-                    " ",
-                    strip=True,
-                )
-            )
-
-            if len(candidate) >= 40:
-                summary = candidate
-                break
-
-    # Solution de secours avec les métadonnées
-    if not summary:
-        metadata_options = (
-            {
-                "property": "og:description"
-            },
-            {
-                "name": "description"
-            },
-        )
-
-        for attrs in metadata_options:
-            tag = soup.find(
-                "meta",
-                attrs=attrs,
-            )
-
-            candidate = _clean_text(
-                tag.get("content")
-                if tag
-                else ""
-            )
-
-            if candidate:
-                summary = candidate
-                break
-
-    # Image
-    image_url = None
-
-    og_image = soup.find(
-        "meta",
-        attrs={
-            "property": "og:image"
-        },
-    )
-
-    if (
-        og_image
-        and og_image.get("content")
-    ):
-        image_url = urljoin(
-            page_url,
-            og_image.get("content"),
-        )
-
-    # Image de secours dans main
-    if not image_url:
-        main_content = soup.find("main")
-
-        image = (
-            main_content.find(
-                "img",
-                src=True,
-            )
-            if main_content
-            else None
-        )
-
-        if image:
-            image_url = urljoin(
-                page_url,
-                image.get("src"),
-            )
-
-    return ProtectedPlace(
+    """Construit un ``ProtectedPlace`` sans faire échouer le lot si un champ manque."""
+    soup = BeautifulSoup(html_content, "html.parser")
+    place = ProtectedPlace(
         id=_stable_id(page_url),
-        name=name,
-        province=_province_from_url(
-            page_url
-        ),
-        type=_type_from_name(name),
-        summary=summary,
-        url=page_url,
-        image_url=image_url,
-        collected_at=datetime.now(
-            timezone.utc
-        ).isoformat(),
+        name=_extract_name(soup, fallback_name, logger),
+        province=_province_from_url(page_url),
+        type="",
+        summary=_extract_summary(soup, logger),
+        url=urljoin(source_url, page_url),
+        image_url=_extract_image_url(soup, page_url, logger),
+        collected_at=datetime.now(timezone.utc).isoformat(),
         source_url=source_url,
     )
-
-
-def parse_places(
-    html_content: str,
-    source_url: str,
-) -> list[ProtectedPlace]:
-    """
-    Fonction utilisée pour la vérification hors ligne.
-    """
-
-    soup = BeautifulSoup(
-        html_content,
-        "html.parser",
-    )
-
-    places = []
-
-    cards = soup.select(
-        "article[data-park-card], "
-        "article.park-card"
-    )
-
-    for card in cards[:60]:
-        link = card.find(
-            "a",
-            href=True,
-        )
-
-        if not link:
-            continue
-
-        page_url = urljoin(
-            source_url,
-            link.get("href", ""),
-        )
-
-        name_tag = card.find(
-            [
-                "h2",
-                "h3",
-                "h4",
-            ]
-        )
-
-        name = _clean_text(
-            name_tag.get_text(
-                " ",
-                strip=True,
-            )
-            if name_tag
-            else ""
-        )
-
-        summary_tag = card.find("p")
-
-        summary = _clean_text(
-            summary_tag.get_text(
-                " ",
-                strip=True,
-            )
-            if summary_tag
-            else ""
-        )
-
-        image = card.find(
-            "img",
-            src=True,
-        )
-
-        province = (
-            card.get(
-                "data-province",
-                "",
-            )
-            or _province_from_url(
-                page_url
-            )
-        )
-
-        park_type = (
-            card.get(
-                "data-type",
-                "",
-            )
-            or _type_from_name(name)
-        )
-
-        place = ProtectedPlace(
-            id=_stable_id(page_url),
-            name=name,
-            province=province,
-            type=park_type,
-            summary=summary,
-            url=page_url,
-            image_url=(
-                urljoin(
-                    source_url,
-                    image.get("src"),
-                )
-                if image
-                else None
-            ),
-            collected_at=datetime.now(
-                timezone.utc
-            ).isoformat(),
-            source_url=source_url,
-        )
-
-        places.append(place)
-
-    return places
+    place.type = _type_from_name(place.name)
+    return place.clean()
