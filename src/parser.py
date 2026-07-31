@@ -1,5 +1,3 @@
-"""Parsing HTML de la liste et des fiches de Parcs Canada."""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
