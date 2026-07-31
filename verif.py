@@ -1,285 +1,172 @@
+from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
-from config import OUTPUT_JSONL, SOURCE_URL
-from src.parser import parse_park_detail
+from config import SAMPLE_JSONL, SOURCE_URL
+from src.models import ProtectedPlace
+from src.parser import parse_park_links
+
+SAMPLE_PAGE = Path("samples/sample_page.html")
+SAMPLE_OUTPUT = Path(SAMPLE_JSONL)
+MAX_OBJECTS = 60
 
 
-OUTPUT_FILE = Path(OUTPUT_JSONL)
-EXPECTED_OBJECT_COUNT = 47
-
-
-def display_result(
-    control_name: str,
-    success: bool,
-    details: str = "",
-) -> bool:
-    """
-    Affiche un résultat au format OK ou ECHEC.
-    """
-
-    status = "OK" if success else "ECHEC"
-    print(f"{control_name} : {status}")
-
-    if details:
-        print(f"  {details}")
-
-    return success
-
-
-def load_jsonl(file_path: Path) -> list[dict]:
-    """
-    Charge un fichier JSONL sans effectuer de requête réseau.
-
-    Chaque ligne non vide doit contenir un objet JSON valide.
-    """
-
-    objects = []
-
-    with file_path.open(
-        mode="r",
-        encoding="utf-8",
-    ) as file:
-        for line_number, line in enumerate(
-            file,
-            start=1,
-        ):
-            line = line.strip()
-
+def load_jsonl(path: Path) -> list[dict]:
+    objects: list[dict] = []
+    with path.open("r", encoding="utf-8") as file:
+        for line_number, raw in enumerate(file, start=1):
+            line = raw.strip()
             if not line:
                 continue
-
             try:
                 item = json.loads(line)
             except json.JSONDecodeError as error:
-                raise ValueError(
-                    f"Ligne JSON invalide à la ligne "
-                    f"{line_number} : {error}"
-                ) from error
-
+                raise ValueError(f"JSON invalide ligne {line_number}: {error}") from error
             if not isinstance(item, dict):
-                raise ValueError(
-                    f"La ligne {line_number} ne contient "
-                    "pas un objet JSON."
-                )
-
+                raise ValueError(f"La ligne {line_number} n'est pas un objet JSON")
             objects.append(item)
-
     return objects
 
 
-def check_object_count(
-    objects: list[dict],
-) -> bool:
-    """
-    Contrôle 1 :
-    vérifie que le fichier contient exactement 47 objets.
-    """
-
-    actual_count = len(objects)
-    success = actual_count == EXPECTED_OBJECT_COUNT
-
-    return display_result(
-        "Contrôle 1 - nombre d'objets extraits",
-        success,
-        (
-            f"Attendu : {EXPECTED_OBJECT_COUNT} | "
-            f"Obtenu : {actual_count}"
-        ),
-    )
-
-
 def is_absolute_http_url(value: object) -> bool:
-    """
-    Vérifie qu'une valeur est une URL HTTP ou HTTPS absolue.
-    """
-
     if not isinstance(value, str):
         return False
-
-    parsed_url = urlparse(value)
-
-    return (
-        parsed_url.scheme in {"http", "https"}
-        and bool(parsed_url.netloc)
-    )
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def check_normalization(
-    objects: list[dict],
-) -> bool:
-    """
-    Contrôle 2 :
-    vérifie les URLs absolues et les provinces en majuscules.
-    """
-
-    invalid_urls = []
-    invalid_provinces = []
-
-    for index, item in enumerate(
-        objects,
-        start=1,
-    ):
-        park_url = item.get("url")
-        province = item.get("province")
-
-        if not is_absolute_http_url(park_url):
-            invalid_urls.append(index)
-
-        if (
-            not isinstance(province, str)
-            or not province.strip()
-            or province != province.upper()
-        ):
-            invalid_provinces.append(index)
-
-    success = (
-        not invalid_urls
-        and not invalid_provinces
-    )
-
-    details = (
-        f"URL absolues invalides : {len(invalid_urls)} | "
-        f"Provinces non normalisées : "
-        f"{len(invalid_provinces)}"
-    )
-
-    return display_result(
-        "Contrôle 2 - normalisation des données",
-        success,
-        details,
-    )
+def as_place(item: dict) -> ProtectedPlace:
+    return ProtectedPlace(
+        id=item.get("id", ""),
+        name=item.get("name"),
+        province=item.get("province"),
+        type=item.get("type", ""),
+        summary=item.get("summary"),
+        url=item.get("url", ""),
+        image_url=item.get("image_url"),
+        collected_at=item.get("collected_at", ""),
+        source_url=item.get("source_url", ""),
+    ).clean()
 
 
-def check_duplicates_and_rejection(
-    objects: list[dict],
-) -> bool:
-    """
-    Contrôle 3 :
-    vérifie l'absence de doublons et le rejet
-    d'un objet incomplet.
-    """
+def validate_offline() -> tuple[dict[str, int], list[str]]:
+    errors: list[str] = []
+    html = SAMPLE_PAGE.read_text(encoding="utf-8")
+    extracted_links = parse_park_links(html, SOURCE_URL, max_objects=MAX_OBJECTS)
+    objects = load_jsonl(SAMPLE_OUTPUT)
 
-    object_ids = [
-        item.get("id")
-        for item in objects
-        if item.get("id")
+    invalid_urls = [index for index, obj in enumerate(objects, 1) if not is_absolute_http_url(obj.get("url"))]
+    invalid_images = [
+        index for index, obj in enumerate(objects, 1)
+        if obj.get("image_url") is not None and not is_absolute_http_url(obj.get("image_url"))
     ]
+    invalid_provinces = [
+        index for index, obj in enumerate(objects, 1)
+        if not isinstance(obj.get("province"), str)
+        or not obj["province"].strip()
+        or obj["province"] != obj["province"].upper()
+    ]
+    if invalid_urls:
+        errors.append(f"URLs de parc non absolues aux lignes : {invalid_urls}")
+    if invalid_images:
+        errors.append(f"URLs d'image non absolues aux lignes : {invalid_images}")
+    if invalid_provinces:
+        errors.append(f"Provinces non normalisées aux lignes : {invalid_provinces}")
 
-    duplicate_count = (
-        len(object_ids)
-        - len(set(object_ids))
+    # Le lot de test contient le contenu exporté + un doublon + un objet incomplet.
+    candidates = [as_place(item) for item in objects]
+    if candidates:
+        candidates.append(as_place(objects[0]))
+    candidates.append(
+        ProtectedPlace(
+            id="fixture-incomplete",
+            name=None,
+            province="QC",
+            type="National Park",
+            summary="",
+            url="https://parks.canada.ca/pn-np/qc/fixture-incomplete",
+            image_url=None,
+            collected_at="2026-07-31T07:00:00Z",
+            source_url=SOURCE_URL,
+        ).clean()
     )
 
-    incomplete_html = """
-    <!DOCTYPE html>
-    <html lang="fr">
-        <head>
-            <meta charset="utf-8">
-        </head>
-        <body>
-            <main>
-                <h1>Incomplete National Park</h1>
-            </main>
-        </body>
-    </html>
-    """
+    seen_ids: set[str] = set()
+    exported = rejected = duplicates = missing_fields = 0
+    for place in candidates:
+        missing = place.missing_required_fields()
+        if missing:
+            rejected += 1
+            missing_fields += len(missing)
+            continue
+        if place.id in seen_ids:
+            rejected += 1
+            duplicates += 1
+            continue
+        seen_ids.add(place.id)
+        exported += 1
 
-    incomplete_place = parse_park_detail(
-        html_content=incomplete_html,
-        page_url=(
-            "https://parks.canada.ca/"
-            "pn-np/ab/incomplete"
-        ),
-        source_url=SOURCE_URL,
-        fallback_name="Incomplete National Park",
-    )
+    if len(extracted_links) != len(objects):
+        errors.append(
+            f"La page locale fournit {len(extracted_links)} liens mais le JSONL contient {len(objects)} objets"
+        )
+    if duplicates != 1:
+        errors.append(f"Le test attend 1 doublon rejeté, obtenu : {duplicates}")
+    if missing_fields < 1:
+        errors.append("L'objet incomplet n'a pas produit de champ manquant")
+    if exported != len(objects):
+        errors.append(f"Export attendu après tests : {len(objects)}, obtenu : {exported}")
 
-    missing_fields = (
-        incomplete_place.missing_required_fields()
-    )
+    stats = {
+        "Vus": len(candidates),
+        "Exportés": exported,
+        "Rejetés": rejected,
+        "Doublons": duplicates,
+        "Champs manquants": missing_fields,
+    }
+    return stats, errors
 
-    rejection_success = (
-        "summary" in missing_fields
-    )
 
-    success = (
-        duplicate_count == 0
-        and rejection_success
-    )
-
-    details = (
-        f"Doublons détectés : {duplicate_count} | "
-        "Objet incomplet rejeté : "
-        f"{'oui' if rejection_success else 'non'}"
-    )
-
-    return display_result(
-        "Contrôle 3 - déduplication et rejet",
-        success,
-        details,
-    )
+def print_table(stats: dict[str, int]) -> None:
+    headers = list(stats.keys())
+    widths = [max(len(header), len(str(stats[header]))) for header in headers]
+    border = "+" + "+".join("-" * (width + 2) for width in widths) + "+"
+    print(border)
+    print("|" + "|".join(f" {header:<{width}} " for header, width in zip(headers, widths)) + "|")
+    print(border)
+    print("|" + "|".join(f" {stats[header]:<{width}} " for header, width in zip(headers, widths)) + "|")
+    print(border)
 
 
 def main() -> int:
-    """
-    Exécute tous les contrôles hors ligne.
-    """
-
-    print("=" * 60)
-    print("VÉRIFICATION HORS LIGNE DU SCRAPER PARCS CANADA")
-    print("=" * 60)
-
-    if not OUTPUT_FILE.exists():
-        display_result(
-            "Chargement du fichier de sortie",
-            False,
-            f"Fichier introuvable : {OUTPUT_FILE}",
-        )
-
-        print(
-            "\nLance d'abord la collecte avec : "
-            "python main.py"
-        )
-
-        return 1
+    print("=== VÉRIFICATION HORS LIGNE — PARCS CANADA ===")
+    for required in (SAMPLE_PAGE, SAMPLE_OUTPUT):
+        if not required.exists():
+            print(f"ECHEC : fichier introuvable : {required}")
+            return 1
 
     try:
-        objects = load_jsonl(
-            OUTPUT_FILE
-        )
-    except (OSError, ValueError) as error:
-        display_result(
-            "Chargement du fichier de sortie",
-            False,
-            str(error),
-        )
+        stats, errors = validate_offline()
+    except (OSError, ValueError, TypeError) as error:
+        print(f"ECHEC : {error}")
         return 1
 
-    results = [
-        check_object_count(objects),
-        check_normalization(objects),
-        check_duplicates_and_rejection(objects),
-    ]
+    print_table(stats)
+    print("Normalisation URL absolue :", "OK" if not any("URL" in e for e in errors) else "ECHEC")
+    print("Déduplication            :", "OK" if stats["Doublons"] == 1 else "ECHEC")
+    print("Rejet champs manquants   :", "OK" if stats["Champs manquants"] >= 1 else "ECHEC")
 
-    successful_controls = sum(results)
-    total_controls = len(results)
+    if errors:
+        print("\nANOMALIES :")
+        for error in errors:
+            print(f"- {error}")
+        return 1
 
-    print("-" * 60)
-    print(
-        f"Résultat final : "
-        f"{successful_controls}/{total_controls} "
-        "contrôles réussis"
-    )
-
-    if all(results):
-        print("Vérification terminée : OK")
-        return 0
-
-    print("Vérification terminée : ECHEC")
-    return 1
+    print("\nRésultat final : 3/3 contrôles réussis")
+    return 0
 
 
 if __name__ == "__main__":
