@@ -152,7 +152,7 @@ curl.exe "https://parks.canada.ca/pn-np/recherche-parcs-parks-search"
 
 ### Niveau 1
 
-- Aucun fichier CSV ou JSON public contenant les données des parcs n'a été utilisé.
+- Aucun jeu de données public préstructuré n'a été utilisé : les données proviennent du HTML des pages publiques.
 
 ### Niveau 2
 
