@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from datetime import datetime, timezone
 from html import unescape
 from urllib.parse import urljoin, urlparse
