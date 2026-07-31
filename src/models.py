@@ -1,5 +1,3 @@
-"""Modèle métier et normalisation des lieux protégés."""
-
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
