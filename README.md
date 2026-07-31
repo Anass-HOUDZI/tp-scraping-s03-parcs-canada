@@ -1,198 +1,127 @@
-# TP Scraping S03 – Parcs Canada
+# TP Web Scraping S03 — Parcs Canada
 
-## Présentation
+**Étudiants :** Barakissa Koné et Anass Houdzi  
+**Organisation :** projet réalisé en binôme conformément aux consignes données en cours  
+**Formation :** Mastère IA, Développement & Data — IPSSI Lille  
+**Objet métier :** `ProtectedPlace`  
+**Cible :** `https://parks.canada.ca/pn-np`
 
-Ce projet a été réalisé dans le cadre du module **Web Scraping** à l'IPSSI.
+## Objectif
 
-L'objectif est de développer un scraper permettant de collecter automatiquement les informations des parcs nationaux du Canada à partir du site officiel de Parks Canada.
+Collecter au maximum 60 lieux protégés publiés par Parcs Canada, transformer le HTML public en objets structurés, contrôler leur qualité puis les exporter au format JSON Lines.
 
-Le programme récupère la liste des parcs disponibles, visite chaque page de détail afin d'extraire les informations utiles, puis exporte les données dans des formats exploitables.
+Le site délivre le contenu utile dans le HTML initial : `requests` suffit pour l'acquisition et `BeautifulSoup` pour le parsing. Selenium n'apporterait ici qu'un coût supplémentaire sans bénéfice fonctionnel.
 
----
+## Données produites
 
-## Objectifs
+Chaque objet contient :
 
-Le projet permet de :
+- `id` : identifiant stable dérivé de l'URL ;
+- `name` : nom du lieu ;
+- `province` : code territorial normalisé en majuscules ;
+- `type` : type de lieu protégé ;
+- `summary` : résumé ;
+- `url` : URL absolue ;
+- `image_url` : URL absolue de l'image, si disponible ;
+- `collected_at` : horodatage UTC ;
+- `source_url` : source de référence.
 
-- récupérer automatiquement les liens des parcs nationaux ;
-- visiter les pages de détail de chaque parc ;
-- extraire les informations demandées ;
-- nettoyer et normaliser les données ;
-- exporter les résultats au format JSONL et CSV ;
-- vérifier automatiquement la qualité des données collectées.
+## Architecture
 
----
-
-## Architecture & Flux de Données
-
-Le projet respecte une séparation stricte des responsabilités (SOC) pour garantir maintenabilité et évolutivité.
-
-```mermaid
-graph LR
-    A[config.py<br/>Config & Constantes] --> B(fetcher.py<br/>Acquisition HTTP)
-    B -->|HTML Brut| C(parser.py<br/>Extraction BS4)
-    C -->|Données Brutes| D(models.py<br/>Validation & Nettoyage)
-    D -->|Objets Validés| E(exporter.py<br/>Génération Fichiers)
-    
-    style B fill:#dbeafe,stroke:#3b82f6
-    style C fill:#dcfce7,stroke:#22c55e
-    style D fill:#fef9c3,stroke:#eab308
-    style E fill:#fce7f3,stroke:#ec4899
-
----
-
-## Technologies utilisées
-
-- Python 3
-- Requests
-- BeautifulSoup
-- Dataclasses
-- Logging
-- JSON Lines (JSONL)
-- CSV
-
----
-
-## Source des données
-
-Les données proviennent du site officiel de Parks Canada :
-
-https://parks.canada.ca/pn-np/recherche-parcs-parks-search
-
-Le scraper utilise des requêtes HTTP GET pour récupérer le contenu HTML des pages. Les informations nécessaires étant directement présentes dans le HTML, aucun navigateur automatisé (Selenium ou Playwright) n'est utilisé.
-
----
-
-## Données collectées
-
-Pour chaque parc, le programme récupère les informations suivantes :
-
-| Champ | Description |
-|--------|-------------|
-| id | Identifiant unique |
-| name | Nom du parc |
-| province | Province canadienne |
-| type | Type du parc |
-| summary | Description du parc |
-| url | URL de la page du parc |
-| image_url | URL de l'image principale |
-| collected_at | Date de collecte |
-| source_url | URL de la page source |
-
----
+```text
+config.py                Paramètres centralisés et surchargeables par environnement
+main.py                  Orchestration du pipeline
+verif.py                 Vérification hors ligne
+src/
+  fetcher.py             Session HTTP, délai, timeout, retry exponentiel
+  parser.py              Sélecteurs sémantiques et stratégies de repli
+  models.py              Dataclass, nettoyage et validation
+  exporter.py            Export JSONL
+  logger.py              Traces INFO / WARNING / ERROR
+docs/
+  architecture.md        Flux de données et décisions techniques
+  AI_USAGE.md            Déclaration transparente de l'usage de l'IA
+samples/
+  sample_page.html       Copie locale de la page de liste
+  sample_output.jsonl    Sortie JSONL vérifiable de 47 objets
+```
 
 ## Installation
 
-Cloner le dépôt :
-
-```bash
-git clone https://github.com/<repository>.git
-```
-
-Créer un environnement virtuel :
-
-```bash
+```powershell
 python -m venv .venv
-```
-
-Activer l'environnement virtuel :
-
-Sous Windows :
-
-```bash
-.venv\Scripts\activate
-```
-
-Sous Linux ou macOS :
-
-```bash
-source .venv/bin/activate
-```
-
-Installer les dépendances :
-
-```bash
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
----
+## Configuration
 
-## Exécution
+Les valeurs par défaut sont définies dans `config.py`. Elles peuvent être surchargées par des variables d'environnement.
 
-Pour lancer le scraper :
+```powershell
+$env:PARKS_CONTACT_EMAIL="prenom.nom@exemple.fr"
+$env:PARKS_MAX_OBJECTS="60"
+$env:PARKS_REQUEST_DELAY="1.0"
+```
 
-```bash
+Le `User-Agent` identifie clairement le scraper et contient un contact. Le header `Accept-Language` force la préférence française : `fr-CA,fr;q=0.9`.
+
+## Exécution complète
+
+```powershell
 python main.py
 ```
 
-Le programme effectue les étapes suivantes :
-
-1. télécharge la page de recherche ;
-2. récupère les liens des parcs ;
-3. visite chaque page de détail ;
-4. extrait les informations ;
-5. nettoie les données ;
-6. exporte les résultats.
-
----
-
-## Vérification
-
-Le projet contient un script permettant de vérifier automatiquement les données produites.
-
-Exécuter :
-
-```bash
-python verif.py
-```
-
-Les vérifications portent notamment sur :
-
-- la présence des champs obligatoires ;
-- la normalisation des provinces ;
-- les URLs absolues ;
-- l'absence de doublons ;
-- le respect du contrat de données.
-
----
-
-## Résultats
-
-Les données sont exportées dans les fichiers suivants :
+Sorties :
 
 ```text
 data/parcs_canada.jsonl
+samples/sample_output.jsonl
+logs/scraper.log
 ```
 
-et
+Le fichier `data/` est une sortie locale complète. L'échantillon placé dans `samples/` est versionné pour permettre la correction hors ligne.
+
+## Vérification hors ligne
+
+```powershell
+python verif.py
+```
+
+Le script ne réalise aucune requête réseau. Il :
+
+1. reparcourt `samples/sample_page.html` avec le vrai parseur de liens ;
+2. contrôle les URL absolues et les provinces normalisées ;
+3. injecte un doublon et un objet incomplet pour vérifier leur rejet ;
+4. affiche le tableau `Vus / Exportés / Rejetés / Doublons / Champs manquants`.
+
+Résultat attendu :
 
 ```text
-data/parcs_canada.csv
+Vus : 49 | Exportés : 47 | Rejetés : 2 | Doublons : 1 | Champs manquants : 2
+3/3 contrôles réussis
 ```
 
----
+## Fiche descriptive de la cible S03
+
+- **Nature :** site institutionnel public, bilingue français/anglais.
+- **Rendu :** contenu accessible dans le HTML initial ; JavaScript non requis.
+- **Méthode HTTP :** GET uniquement.
+- **Volume :** plafond strict de 60 objets ; le jeu observé contient 47 parcs.
+- **Politesse :** délai entre les requêtes, session persistante, timeout, retry exponentiel sur 429 et erreurs serveur temporaires.
+- **Sélecteurs :** ancres HTML, `h1`, `main`, paragraphes et métadonnées Open Graph ; aucune dépendance principale à une classe CSS volatile.
+- **Éthique :** aucune authentification, aucun CAPTCHA contourné, aucune donnée personnelle, aucune écriture sur le site.
 
 ## Limites
 
-Le scraper dépend de la structure HTML du site. Les principaux risques sont :
+Le parseur dépend malgré tout de la structure éditoriale du site. Un changement des balises sémantiques ou des conventions d'URL peut imposer une adaptation. La province est déduite de l'URL ; cette règle doit être réévaluée si le routage du site change.
 
-- modification des balises HTML ;
-- changement des sélecteurs utilisés ;
-- modification des URLs ;
-- disparition de certaines informations.
+## Commandes utiles avant remise
 
----
-
-## Cadre d'utilisation
-
-Ce projet est réalisé dans un cadre pédagogique dans le cadre du module de Web Scraping de l'IPSSI.
-
-Les données collectées proviennent d'un site public et sont utilisées uniquement à des fins d'apprentissage.
-
----
-
-## Etudiants 
-
-- Anass Houdzi
-- Barakissa Koné
-
+```powershell
+python -m compileall .
+python verif.py
+git status
+git log -1 --oneline
+```
