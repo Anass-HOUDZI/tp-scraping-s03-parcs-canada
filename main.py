@@ -1,242 +1,100 @@
+from __future__ import annotations
+
 from config import (
     ACCEPT_LANGUAGE,
+    BACKOFF_FACTOR,
     LIST_URL,
     LOG_FILE,
     MAX_OBJECTS,
+    MAX_RETRIES,
     OUTPUT_JSONL,
     REQUEST_DELAY,
     REQUEST_TIMEOUT,
+    SAMPLE_JSONL,
     SOURCE_URL,
     USER_AGENT,
 )
-
 from src.exporter import export_to_jsonl
 from src.fetcher import Fetcher
 from src.logger import get_logger
-from src.parser import (
-    parse_park_detail,
-    parse_park_links,
-)
+from src.parser import parse_park_detail, parse_park_links
 
 
-def main():
-    """
-    Lance le scraping des parcs nationaux du Canada.
-    """
+def main() -> int:
+    logger = get_logger(log_file=LOG_FILE)
+    valid_places = []
+    seen_ids: set[str] = set()
+    rejected_count = duplicate_count = missing_fields_count = 0
 
-    logger = get_logger(
-        name="parcs_canada",
-        log_file=LOG_FILE,
-    )
-
-    fetcher = Fetcher(
+    with Fetcher(
         user_agent=USER_AGENT,
         accept_language=ACCEPT_LANGUAGE,
         delay=REQUEST_DELAY,
         timeout=REQUEST_TIMEOUT,
+        max_retries=MAX_RETRIES,
+        backoff_factor=BACKOFF_FACTOR,
         logger=logger,
-    )
+    ) as fetcher:
+        logger.info("Début du scraping | cible=%s | plafond=%s", LIST_URL, MAX_OBJECTS)
+        listing_html = fetcher.fetch_page(LIST_URL)
+        if listing_html is None:
+            logger.error("Impossible de télécharger la page de liste")
+            return 1
 
-    valid_places = []
-    seen_ids = set()
-
-    rejected_count = 0
-    duplicate_count = 0
-    missing_fields_count = 0
-
-    try:
-        logger.info(
-            "Début du scraping des parcs du Canada"
-        )
-
-        # Télécharger la page contenant la liste des parcs
-        listing_html = fetcher.fetch_page(
-            LIST_URL
-        )
-
-        if not listing_html:
-            logger.error(
-                "Impossible de télécharger la page "
-                "contenant la liste des parcs."
-            )
-
-            print(
-                "Impossible de télécharger la page "
-                "contenant la liste des parcs."
-            )
-
-            return
-
-        # Extraire les liens des parcs
         park_links = parse_park_links(
-            html_content=listing_html,
+            listing_html,
             source_url=LIST_URL,
             max_objects=MAX_OBJECTS,
+            logger=logger,
         )
 
-        print(
-            f"Nombre de parcs trouvés : "
-            f"{len(park_links)}"
-        )
-
-        # Parcourir chaque parc
-        for index, park_link in enumerate(
-            park_links,
-            start=1,
-        ):
-            park_name = park_link["name"]
-            park_url = park_link["url"]
-
-            print(
-                f"[{index}/{len(park_links)}] "
-                f"{park_name}"
-            )
-
-            # Télécharger la page de détail
-            detail_html = fetcher.fetch_page(
-                park_url
-            )
-
-            if not detail_html:
+        for index, link in enumerate(park_links, start=1):
+            logger.info("Traitement %s/%s : %s", index, len(park_links), link["url"])
+            detail_html = fetcher.fetch_page(link["url"])
+            if detail_html is None:
                 rejected_count += 1
-
-                logger.warning(
-                    "Page non téléchargée : %s",
-                    park_name,
-                )
-
-                print(
-                    f"Page non téléchargée : "
-                    f"{park_name}"
-                )
-
+                logger.warning("Objet rejeté : page non téléchargée | %s", link["url"])
                 continue
 
-            # Extraire les informations détaillées
             place = parse_park_detail(
-                html_content=detail_html,
-                page_url=park_url,
+                detail_html,
+                page_url=link["url"],
                 source_url=SOURCE_URL,
-                fallback_name=park_name,
+                fallback_name=link["name"],
+                logger=logger,
             )
-
-            # Vérifier les champs obligatoires
-            missing_fields = (
-                place.missing_required_fields()
-            )
-
-            if missing_fields:
+            missing = place.missing_required_fields()
+            if missing:
                 rejected_count += 1
-                missing_fields_count += len(
-                    missing_fields
-                )
-
-                logger.warning(
-                    "Objet rejeté : %s | "
-                    "Champs manquants : %s",
-                    park_name,
-                    ", ".join(missing_fields),
-                )
-
-                print(
-                    f"Objet rejeté : {park_name}"
-                )
-
-                print(
-                    "Champs manquants :",
-                    ", ".join(missing_fields),
-                )
-
+                missing_fields_count += len(missing)
+                logger.warning("Objet rejeté | id=%s | champs=%s", place.id, ", ".join(missing))
                 continue
 
-            # Vérifier les doublons
             if place.id in seen_ids:
                 rejected_count += 1
                 duplicate_count += 1
-
-                logger.warning(
-                    "Doublon ignoré : %s",
-                    place.id,
-                )
-
-                print(
-                    f"Doublon ignoré : {place.id}"
-                )
-
+                logger.warning("Doublon rejeté | id=%s", place.id)
                 continue
 
             seen_ids.add(place.id)
             valid_places.append(place)
 
-        print("\nScraping terminé")
+    exported = export_to_jsonl(valid_places, OUTPUT_JSONL) if valid_places else 0
+    if valid_places:
+        export_to_jsonl(valid_places, SAMPLE_JSONL)
 
-        print(
-            "Nombre de parcs trouvés :",
-            len(park_links),
-        )
-
-        print(
-            "Nombre de parcs valides :",
-            len(valid_places),
-        )
-
-        print(
-            "Nombre de parcs rejetés :",
-            rejected_count,
-        )
-
-        print(
-            "Nombre de doublons :",
-            duplicate_count,
-        )
-
-        print(
-            "Nombre de champs manquants :",
-            missing_fields_count,
-        )
-
-        # Exporter tous les parcs valides
-        # dans samples/sample_output.jsonl
-        if valid_places:
-            export_to_jsonl(
-                valid_places,
-                OUTPUT_JSONL,
-            )
-
-            print(
-                f"{len(valid_places)} parcs exportés "
-                f"dans {OUTPUT_JSONL}"
-            )
-
-            logger.info(
-                "%s parcs exportés dans %s",
-                len(valid_places),
-                OUTPUT_JSONL,
-            )
-        else:
-            print(
-                "Aucune donnée valide à exporter."
-            )
-
-            logger.warning(
-                "Aucune donnée valide à exporter."
-            )
-
-    except Exception as error:
-        logger.exception(
-            "Une erreur inattendue est survenue : %s",
-            error,
-        )
-
-        print(
-            "Une erreur inattendue est survenue :",
-            error,
-        )
-
-    finally:
-        fetcher.close()
-        logger.info("Fin du programme")
+    print("\nRÉCAPITULATIF")
+    print(f"Vus             : {len(park_links)}")
+    print(f"Exportés        : {exported}")
+    print(f"Rejetés         : {rejected_count}")
+    print(f"Doublons        : {duplicate_count}")
+    print(f"Champs manquants: {missing_fields_count}")
+    logger.info(
+        "Fin | vus=%s exportés=%s rejetés=%s doublons=%s champs_manquants=%s",
+        len(park_links), exported, rejected_count, duplicate_count, missing_fields_count,
+    )
+    return 0 if exported else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
