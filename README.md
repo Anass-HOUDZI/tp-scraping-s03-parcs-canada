@@ -23,6 +23,24 @@ Le projet permet de :
 
 ---
 
+## Architecture & Flux de Données
+
+Le projet respecte une séparation stricte des responsabilités (SOC) pour garantir maintenabilité et évolutivité.
+
+```mermaid
+graph LR
+    A[config.py<br/>Config & Constantes] --> B(fetcher.py<br/>Acquisition HTTP)
+    B -->|HTML Brut| C(parser.py<br/>Extraction BS4)
+    C -->|Données Brutes| D(models.py<br/>Validation & Nettoyage)
+    D -->|Objets Validés| E(exporter.py<br/>Génération Fichiers)
+    
+    style B fill:#dbeafe,stroke:#3b82f6
+    style C fill:#dcfce7,stroke:#22c55e
+    style D fill:#fef9c3,stroke:#eab308
+    style E fill:#fce7f3,stroke:#ec4899
+
+---
+
 ## Technologies utilisées
 
 - Python 3
